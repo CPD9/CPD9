@@ -8,3 +8,4 @@ Software engineer and tech entrepreneur with expertise in AI, blockchain, and di
 
 ![giphy](https://github.com/user-attachments/assets/975cf9bd-9547-436e-bd4e-916ab0617915)
 
+Website: [cpd9.netlify.app ](https://cpd9.netlify.app)
