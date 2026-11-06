@@ -8,6 +8,13 @@ Software engineer and tech entrepreneur with expertise in AI, blockchain, and di
 
 <p>
   <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/stack-dark.svg">
+    <img alt="Languages: Python, TypeScript, JavaScript, SQL, HTML/CSS. Tools: PyTorch, scikit-learn, Next.js, React, Tailwind CSS, Bun, PostgreSQL, Prisma, Three.js, Ollama, FHIR R4" src="assets/stack-light.svg" width="100%">
+  </picture>
+</p>
+
+<p>
+  <picture>
     <source media="(prefers-color-scheme: dark)" srcset="assets/totals-dark.svg">
     <img alt="Last 12 months: contributions, commits, pull requests, reviews and issues, with commits, pull requests and reviews as a triangle" src="assets/totals-light.svg" width="100%">
   </picture>
