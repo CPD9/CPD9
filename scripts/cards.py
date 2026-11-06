@@ -1,15 +1,16 @@
 """Profile cards for github.com/CPD9, drawn from the GitHub GraphQL API.
 
-Writes assets/{year,streak}-{dark,light}.svg. Standard library only, so the
+Writes assets/{year,balance}-{dark,light}.svg. Standard library only, so the
 daily workflow needs nothing installed. Run: GITHUB_TOKEN=... python3 scripts/cards.py
 """
 
 from __future__ import annotations
 
 import json
+import math
 import os
 import urllib.request
-from datetime import date, datetime, timedelta, timezone
+from datetime import date
 from pathlib import Path
 from xml.sax.saxutils import escape
 
@@ -55,7 +56,6 @@ def graphql(query: str, variables: dict) -> dict:
 YEAR = """
 query($login: String!) {
   user(login: $login) {
-    createdAt
     contributionsCollection {
       totalCommitContributions
       totalPullRequestContributions
@@ -69,82 +69,6 @@ query($login: String!) {
   }
 }
 """
-
-SPAN = """
-query($login: String!, $from: DateTime!, $to: DateTime!) {
-  user(login: $login) {
-    contributionsCollection(from: $from, to: $to) {
-      contributionCalendar { weeks { contributionDays { date contributionCount } } }
-    }
-  }
-}
-"""
-
-
-def days_of(calendar: dict) -> dict[date, int]:
-    return {
-        date.fromisoformat(day["date"]): day["contributionCount"]
-        for week in calendar["weeks"]
-        for day in week["contributionDays"]
-    }
-
-
-def all_days(created: date, today: date) -> dict[date, int]:
-    """Every day since the account was made, one year-long query at a time."""
-    days: dict[date, int] = {}
-    start = created
-    while start <= today:
-        end = min(start + timedelta(days=364), today)
-        data = graphql(
-            SPAN,
-            {
-                "login": LOGIN,
-                "from": f"{start.isoformat()}T00:00:00Z",
-                "to": f"{end.isoformat()}T23:59:59Z",
-            },
-        )
-        days.update(days_of(data["user"]["contributionsCollection"]["contributionCalendar"]))
-        start = end + timedelta(days=1)
-    return {day: count for day, count in days.items() if day <= today}
-
-
-def streaks(days: dict[date, int], today: date) -> dict:
-    """Current streak may end yesterday: today is still being written."""
-    ordered = sorted(days)
-    longest = (0, None, None)
-    run, run_start = 0, None
-    for day in ordered:
-        if days[day] > 0:
-            run_start = day if run == 0 else run_start
-            run += 1
-            if run > longest[0]:
-                longest = (run, run_start, day)
-        else:
-            run = 0
-    end = today if days.get(today, 0) > 0 else today - timedelta(days=1)
-    current, cursor = 0, end
-    while days.get(cursor, 0) > 0:
-        current += 1
-        cursor -= timedelta(days=1)
-    return {
-        "current": current,
-        "current_from": cursor + timedelta(days=1) if current else None,
-        "longest": longest[0],
-        "longest_from": longest[1],
-        "longest_to": longest[2],
-    }
-
-
-def short(day: date | None) -> str:
-    return day.strftime("%-d %b %Y") if day else "none yet"
-
-
-def span(start: date | None, end: date | None) -> str:
-    if not start or not end:
-        return "none yet"
-    first = start.strftime("%-d %b") if start.year == end.year else short(start)
-    return f"{first} to {short(end)}"
-
 
 def text(x, y, value, size, colour, weight=400, anchor="start", spacing=0):
     return (
@@ -208,45 +132,60 @@ def year_card(year: dict, theme: dict) -> str:
     return frame(495, 195, f"{LOGIN}: contributions in the last 12 months", "".join(parts), theme)
 
 
-def streak_card(s: dict, active: int, theme: dict) -> str:
-    """The ring is the current streak against the longest: full means a record run."""
-    share = s["current"] / s["longest"] if s["longest"] else 0
-    r, cx, cy = 46, 404, 92
-    circumference = 2 * 3.14159265 * r
-    record = s["current"] and s["current"] == s["longest"]
-    parts = [
-        text(24, 36, "STREAK", 11, theme["muted"], 600, spacing=1.2),
-        text(24, 84, f"{s['current']}", 42, theme["text"], 600),
-        text(24, 106, "days in a row" if s["current"] != 1 else "day in a row", 13, theme["muted"]),
-        text(24, 124, f"since {short(s['current_from'])}" if s["current"] else "starts with the next contribution", 11, theme["muted"]),
-        f'<rect x="24" y="138" width="2" height="34" fill="{theme["accent"]}"/>',
-        text(34, 154, f"{s['longest']} days", 16, theme["text"], 600),
-        text(34, 170, f"longest, {span(s['longest_from'], s['longest_to'])}", 11, theme["muted"]),
-        f'<circle cx="{cx}" cy="{cy}" r="{r}" fill="none" stroke="{theme["heat"][0]}" stroke-width="8"/>',
-        f'<circle cx="{cx}" cy="{cy}" r="{r}" fill="none" stroke="{theme["accent"]}" stroke-width="8" '
-        f'stroke-linecap="round" stroke-dasharray="{circumference * share:.1f} {circumference:.1f}" '
-        f'transform="rotate(-90 {cx} {cy})"/>',
-        text(cx, cy - 2, "record" if record else f"{round(share * 100)}%", 16 if record else 20, theme["text"], 600, anchor="middle"),
-        text(cx, cy + 16, "run" if record else "of record", 11, theme["muted"], anchor="middle"),
-        text(cx, cy + r + 22, f"{active} of 365 days active", 11, theme["muted"], anchor="middle"),
+def balance_card(year: dict, theme: dict) -> str:
+    """Commits, pull requests and reviews as a triangle, each scaled to the largest."""
+    corners = [
+        ("Commits", year["totalCommitContributions"], "building", -90),
+        ("Pull requests", year["totalPullRequestContributions"], "shipping", 30),
+        ("Reviews", year["totalPullRequestReviewContributions"], "reviewing", 150),
     ]
-    return frame(495, 195, f"{LOGIN}: contribution streak", "".join(parts), theme)
+    top = max(value for _, value, _, _ in corners) or 1
+    cx, cy, radius = 360, 104, 70
+
+    def point(angle: float, length: float) -> tuple[float, float]:
+        return (cx + length * math.cos(math.radians(angle)),
+                cy + length * math.sin(math.radians(angle)))
+
+    def polygon(points) -> str:
+        return " ".join(f"{x:.1f},{y:.1f}" for x, y in points)
+
+    parts = [
+        text(24, 36, "HOW I CONTRIBUTE", 11, theme["muted"], 600, spacing=1.2),
+        text(24, 62, "Last 12 months, each corner", 12, theme["muted"]),
+        text(24, 78, "scaled to the largest", 12, theme["muted"]),
+    ]
+    for i, (label, value, verb, _) in enumerate(corners):
+        y = 112 + i * 26
+        parts.append(f'<rect x="24" y="{y - 12}" width="2" height="20" fill="{theme["accent"]}"/>')
+        parts.append(text(34, y + 3, f"{value:,}", 14, theme["text"], 600))
+        parts.append(text(80, y + 3, f"{label.lower()}, {verb}", 11, theme["muted"]))
+    for ring in (1 / 3, 2 / 3, 1):
+        outline = polygon(point(angle, radius * ring) for *_, angle in corners)
+        parts.append(f'<polygon points="{outline}" fill="none" stroke="{theme["line"]}"/>')
+    for *_, angle in corners:
+        x, y = point(angle, radius)
+        parts.append(f'<line x1="{cx}" y1="{cy}" x2="{x:.1f}" y2="{y:.1f}" stroke="{theme["line"]}"/>')
+    shape = [point(angle, radius * value / top) for _, value, _, angle in corners]
+    parts.append(
+        f'<polygon points="{polygon(shape)}" fill="{theme["accent"]}" fill-opacity="0.28" '
+        f'stroke="{theme["accent"]}" stroke-width="2" stroke-linejoin="round"/>'
+    )
+    for x, y in shape:
+        parts.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="3.5" fill="{theme["accent"]}"/>')
+    labels = [(cx, cy - radius - 10), (cx + radius * 0.87 + 6, cy + radius / 2 + 18),
+              (cx - radius * 0.87 - 6, cy + radius / 2 + 18)]
+    for (x, y), (label, *_) in zip(labels, corners):
+        parts.append(text(x, y, label, 11, theme["text"], 600, anchor="middle"))
+    return frame(495, 195, f"{LOGIN}: balance of commits, pull requests and reviews", "".join(parts), theme)
 
 
 def main() -> None:
-    today = datetime.now(timezone.utc).date()
-    user = graphql(YEAR, {"login": LOGIN})["user"]
-    year = user["contributionsCollection"]
-    created = datetime.fromisoformat(user["createdAt"].replace("Z", "+00:00")).date()
-    days = all_days(created, today)
-    s = streaks(days, today)
-    active = sum(1 for d, count in days.items() if count > 0 and (today - d).days < 365)
+    year = graphql(YEAR, {"login": LOGIN})["user"]["contributionsCollection"]
     OUT.mkdir(exist_ok=True)
     for name, theme in THEMES.items():
         (OUT / f"year-{name}.svg").write_text(year_card(year, theme))
-        (OUT / f"streak-{name}.svg").write_text(streak_card(s, active, theme))
-    print(f"cards written: {year['contributionCalendar']['totalContributions']} contributions, "
-          f"streak {s['current']}, longest {s['longest']}, active {active}/365")
+        (OUT / f"balance-{name}.svg").write_text(balance_card(year, theme))
+    print(f"cards written: {year['contributionCalendar']['totalContributions']} contributions")
 
 
 if __name__ == "__main__":

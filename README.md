@@ -41,8 +41,8 @@ fails.
     <img alt="Contributions in the last 12 months: commits, pull requests, reviews and issues, with a 26-week heatmap" src="assets/year-light.svg" width="49%">
   </picture>
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/streak-dark.svg">
-    <img alt="Current and longest contribution streak, and active days in the last year" src="assets/streak-light.svg" width="49%">
+    <source media="(prefers-color-scheme: dark)" srcset="assets/balance-dark.svg">
+    <img alt="Commits, pull requests and reviews in the last 12 months as a triangle, each scaled to the largest" src="assets/balance-light.svg" width="49%">
   </picture>
 </p>
 
