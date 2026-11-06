@@ -1,6 +1,6 @@
 """Profile cards for github.com/CPD9, drawn from the GitHub GraphQL API.
 
-Writes assets/dashboard-{dark,light}.svg. Standard library only, so the
+Writes assets/{totals,averages}-{dark,light}.svg. Standard library only, so the
 daily workflow needs nothing installed. Run: GITHUB_TOKEN=... python3 scripts/cards.py
 """
 
@@ -99,20 +99,24 @@ def frame(width, height, title, body, theme):
     )
 
 
-def heat_level(count: int, top: int) -> int:
-    if count == 0:
+def heat_level(value: float, peak: float) -> int:
+    """0 for nothing, then four steps; the square root keeps quiet weeks visible."""
+    if value <= 0:
         return 0
-    return min(4, 1 + int(3 * count / max(top, 1)))
+    return min(4, 1 + int(3.999 * (value / max(peak, 1e-9)) ** 0.5))
 
 
-def dashboard_card(year: dict, theme: dict) -> str:
-    """Numbers on the left, the commit/PR/review triangle in the middle, the grid on the right."""
-    calendar = year["contributionCalendar"]
-    total = calendar["totalContributions"]
+def rise(delay: float, inner: str) -> str:
+    return f'<g class="rise" style="animation-delay:{delay:.2f}s">{inner}</g>'
+
+
+def totals_card(year: dict, theme: dict) -> str:
+    """The year's numbers on the left; commits, PRs and reviews as a triangle on the right."""
+    total = year["contributionCalendar"]["totalContributions"]
     parts = [
-        f'<g class="rise">{text(28, 40, "LAST 12 MONTHS", 11, theme["muted"], 600, spacing=1.4)}'
-        f'{text(28, 94, f"{total:,}", 48, theme["text"], 700)}'
-        f'{text(28, 118, "contributions", 13, theme["muted"])}</g>',
+        rise(0, text(28, 40, "LAST 12 MONTHS", 11, theme["muted"], 600, spacing=1.4)
+             + text(28, 96, f"{total:,}", 48, theme["text"], 700)
+             + text(28, 120, "contributions", 13, theme["muted"])),
     ]
     stats = [
         ("commits", year["totalCommitContributions"]),
@@ -121,13 +125,11 @@ def dashboard_card(year: dict, theme: dict) -> str:
         ("issues", year["totalIssueContributions"]),
     ]
     for i, (label, value) in enumerate(stats):
-        x, y = 28 + (i % 2) * 124, 158 + (i // 2) * 40
-        parts.append(
-            f'<g class="rise" style="animation-delay:{0.15 + i * 0.1:.2f}s">'
-            f'<rect x="{x}" y="{y - 14}" width="2" height="30" fill="{theme["accent"]}"/>'
-            f'{text(x + 10, y, f"{value:,}", 16, theme["text"], 600)}'
-            f'{text(x + 10, y + 14, label, 11, theme["muted"])}</g>'
-        )
+        x = 28 + i * 118
+        parts.append(rise(0.15 + i * 0.1,
+            f'<rect x="{x}" y="150" width="2" height="34" fill="{theme["accent"]}"/>'
+            + text(x + 10, 166, f"{value:,}", 18, theme["text"], 600)
+            + text(x + 10, 182, label, 11, theme["muted"])))
 
     corners = [
         ("Commits", year["totalCommitContributions"], -90),
@@ -135,7 +137,7 @@ def dashboard_card(year: dict, theme: dict) -> str:
         ("Reviews", year["totalPullRequestReviewContributions"], 150),
     ]
     top = max(value for _, value, _ in corners) or 1
-    cx, cy, radius = 400, 124, 74
+    cx, cy, radius = 680, 120, 78
 
     def point(angle: float, length: float) -> tuple[float, float]:
         return (cx + length * math.cos(math.radians(angle)),
@@ -161,39 +163,87 @@ def dashboard_card(year: dict, theme: dict) -> str:
               (cx - radius * 0.87 - 4, cy + radius / 2 + 20)]
     for (x, y), (label, *_) in zip(labels, corners):
         parts.append(text(x, y, label, 11, theme["text"], 600, anchor="middle"))
+    return frame(860, 220, f"{LOGIN}: contributions in the last 12 months", "".join(parts), theme)
 
-    weeks = calendar["weeks"][-26:]
-    counts = [d["contributionCount"] for w in weeks for d in w["contributionDays"]]
-    peak = sorted(counts)[int(len(counts) * 0.95)] if counts else 1
-    # 26 columns end 28px inside the 860px card.
-    cell, gap, left, top_y = 10, 3, 860 - 28 - (26 * 13 - 3), 60
-    for wi, week in enumerate(weeks):
-        for day in week["contributionDays"]:
-            row = date.fromisoformat(day["date"]).isoweekday() % 7
-            colour = theme["heat"][heat_level(day["contributionCount"], peak)]
+
+def averages(year: dict) -> dict:
+    """Average contributions a day, three ways: by week, by weekday, by month."""
+    days = {date.fromisoformat(d["date"]): d["contributionCount"]
+            for w in year["contributionCalendar"]["weeks"] for d in w["contributionDays"]}
+    ordered = sorted(days)
+    mean = lambda xs: sum(days[d] for d in xs) / len(xs) if xs else 0.0
+    weeks = [ordered[len(ordered) - (i + 1) * 7:len(ordered) - i * 7] for i in range(9)][::-1]
+    by_weekday = [[d for d in ordered if d.isoweekday() == k] for k in range(1, 8)]
+    today = ordered[-1]
+    months, y, m = [], today.year, today.month
+    for _ in range(9):
+        months.append((date(y, m, 1), mean([d for d in ordered if (d.year, d.month) == (y, m)])))
+        y, m = (y, m - 1) if m > 1 else (y - 1, 12)
+    months.reverse()
+    return {
+        "weeks": [mean(w) for w in weeks],
+        "weekday": [mean(w) for w in by_weekday],
+        "weekdays": mean([d for w in by_weekday[:5] for d in w]),
+        "weekend": mean([d for w in by_weekday[5:] for d in w]),
+        "months": months,
+    }
+
+
+def averages_card(avg: dict, theme: dict) -> str:
+    """An isometric cube: top face by week, left by weekday, right by month."""
+    top = avg["weeks"]
+    left = avg["weekday"] + [avg["weekdays"], avg["weekend"]]
+    right = [value for _, value in avg["months"]]
+    peak = max(top + left + right) or 1
+    s, cx, cy = 28, 150, 110
+    a, b, d = (-0.866 * s, -0.5 * s), (0.866 * s, -0.5 * s), (0, s)
+    parts = []
+
+    def face(values, u, v, shade, start):
+        for k, value in enumerate(values):
+            i, j = k // 3, k % 3
+            corners = [(i + x, j + y) for x, y in ((0.09, 0.09), (0.91, 0.09), (0.91, 0.91), (0.09, 0.91))]
+            poly = " ".join(f"{cx + u[0] * p + v[0] * q:.1f},{cy + u[1] * p + v[1] * q:.1f}" for p, q in corners)
             parts.append(
-                f'<rect class="cell" style="animation-delay:{0.3 + wi * 0.035:.3f}s" '
-                f'x="{left + wi * (cell + gap)}" y="{top_y + row * (cell + gap)}" '
-                f'width="{cell}" height="{cell}" rx="2" fill="{colour}"/>'
+                f'<g class="cell" style="animation-delay:{start + k * 0.07:.2f}s">'
+                f'<polygon points="{poly}" fill="{theme["heat"][heat_level(value, peak)]}" '
+                f'stroke="{theme["line"]}" stroke-width="0.6" stroke-linejoin="round"/>'
+                f'<polygon points="{poly}" fill="#000" fill-opacity="{shade}"/></g>'
             )
-    right = left + 26 * (cell + gap) - gap
-    parts.append(text(left, top_y - 14, "LAST 26 WEEKS", 11, theme["muted"], 600, spacing=1.4))
-    # Legend ends flush with the grid: "less" squares "more".
-    legend_y = top_y + 7 * (cell + gap) + 12
-    squares_end = right - 30
-    parts.append(text(squares_end - 5 * (cell + gap) - 4, legend_y + 9, "less", 10, theme["muted"], anchor="end"))
-    for i, colour in enumerate(theme["heat"]):
-        parts.append(f'<rect x="{squares_end - (5 - i) * (cell + gap) + gap}" y="{legend_y}" '
-                     f'width="{cell}" height="{cell}" rx="2" fill="{colour}"/>')
-    parts.append(text(right, legend_y + 9, "more", 10, theme["muted"], anchor="end"))
-    return frame(860, 230, f"{LOGIN}: contributions in the last 12 months", "".join(parts), theme)
+
+    face(top, b, a, 0.0, 0.2)
+    face(left, d, a, 0.1, 0.8)
+    face(right, d, b, 0.22, 1.4)
+
+    names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+    busiest = max(range(7), key=lambda k: avg["weekday"][k])
+    first_month, first_value = avg["months"][0]
+    trend = "up" if right[-1] >= first_value else "down"
+    lines = [
+        ("TOP", "last 9 weeks", f"{top[-1]:.1f} a day this week, {sum(top) / len(top):.1f} on average"),
+        ("LEFT", "by weekday", f"busiest {names[busiest]} at {avg['weekday'][busiest]:.1f}; "
+                               f"weekdays {avg['weekdays']:.1f}, weekends {avg['weekend']:.1f}"),
+        ("RIGHT", "last 9 months", f"{right[-1]:.1f} a day this month, {trend} from {first_value:.1f} "
+                                   f"in {first_month:%B}"),
+    ]
+    x0 = 320
+    parts.append(rise(0, text(x0, 40, "HOW I SHOW UP, AVERAGE CONTRIBUTIONS A DAY", 11, theme["muted"], 600, spacing=1.4)))
+    for n, (side, what, line) in enumerate(lines):
+        y = 86 + n * 46
+        parts.append(rise(0.3 + n * 0.25,
+            f'<rect x="{x0}" y="{y - 14}" width="2" height="32" fill="{theme["accent"]}"/>'
+            + text(x0 + 10, y, f"{side} · {what}", 11, theme["muted"], 600, spacing=0.6)
+            + text(x0 + 10, y + 16, line, 14, theme["text"], 600)))
+    return frame(860, 220, f"{LOGIN}: average contributions a day, as a cube", "".join(parts), theme)
 
 
 def main() -> None:
     year = graphql(YEAR, {"login": LOGIN})["user"]["contributionsCollection"]
+    avg = averages(year)
     OUT.mkdir(exist_ok=True)
     for name, theme in THEMES.items():
-        (OUT / f"dashboard-{name}.svg").write_text(dashboard_card(year, theme))
+        (OUT / f"totals-{name}.svg").write_text(totals_card(year, theme))
+        (OUT / f"averages-{name}.svg").write_text(averages_card(avg, theme))
     print(f"cards written: {year['contributionCalendar']['totalContributions']} contributions")
 
 
