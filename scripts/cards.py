@@ -1,6 +1,6 @@
 """Profile cards for github.com/CPD9, drawn from the GitHub GraphQL API.
 
-Writes assets/{stack,totals,averages}-{dark,light}.svg. Standard library only, so the
+Writes assets/{totals,averages}-{dark,light}.svg. Standard library only, so the
 daily workflow needs nothing installed. Run: GITHUB_TOKEN=... python3 scripts/cards.py
 """
 
@@ -237,39 +237,11 @@ def averages_card(avg: dict, theme: dict) -> str:
     return frame(860, 220, f"{LOGIN}: average contributions a day, as a cube", "".join(parts), theme)
 
 
-STACK = [
-    ("LANGUAGES", ["Python", "TypeScript", "JavaScript", "SQL", "HTML/CSS"]),
-    ("TOOLS", ["PyTorch", "scikit-learn", "Next.js", "React", "Tailwind CSS", "Bun",
-               "PostgreSQL", "Prisma", "Three.js", "Ollama", "FHIR R4"]),
-]
-
-
-def stack_card(theme: dict) -> str:
-    """Languages and tools as pills, from the repos; they fade in one by one."""
-    parts, y, n = [], 30, 0
-    for heading, names in STACK:
-        parts.append(rise(0, text(28, y + 15, heading, 11, theme["muted"], 600, spacing=1.4)))
-        x = 128
-        for name in names:
-            width = 22 + len(name) * 7.2
-            if x + width > 832:
-                x, y = 128, y + 34
-            parts.append(rise(0.1 + n * 0.05,
-                f'<rect x="{x}" y="{y}" width="{width:.0f}" height="24" rx="12" fill="none" '
-                f'stroke="{theme["accent"]}" stroke-opacity="0.6"/>'
-                + text(x + width / 2, y + 16, name, 12, theme["text"], 600, anchor="middle")))
-            x += width + 8
-            n += 1
-        y += 40
-    return frame(860, y + 6, f"{LOGIN}: languages and tools", "".join(parts), theme)
-
-
 def main() -> None:
     year = graphql(YEAR, {"login": LOGIN})["user"]["contributionsCollection"]
     avg = averages(year)
     OUT.mkdir(exist_ok=True)
     for name, theme in THEMES.items():
-        (OUT / f"stack-{name}.svg").write_text(stack_card(theme))
         (OUT / f"totals-{name}.svg").write_text(totals_card(year, theme))
         (OUT / f"averages-{name}.svg").write_text(averages_card(avg, theme))
     print(f"cards written: {year['contributionCalendar']['totalContributions']} contributions")
